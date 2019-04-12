@@ -16,8 +16,8 @@
 using namespace std;
 
 vector<string> split(string str, char delimiter);
-string receiveFile(int socket);
-void storeFile(string fileName , string response);
+string receiveMsg(int socket);
+void storeFile(string filePath , string response);
 
 int main(int argc, char const *argv[]) {
 
@@ -35,7 +35,7 @@ int main(int argc, char const *argv[]) {
         //split client request
         vector<string> splitReq = split(req,' ');
         string reqType = splitReq[0];
-        string requestedFile = splitReq[1];
+        string filePath = splitReq[1];
         string hostAddr = splitReq[2];
 
         //Convert IPv4 and IPv6 addresses from text to binary form
@@ -67,16 +67,49 @@ int main(int argc, char const *argv[]) {
             send(connSocket, req, strlen(req), 0);
 
             //Receive response from server
-            string responseMsg = receiveFile(connSocket);
+            string responseMsg = receiveMsg(connSocket);
 
             //display message
             cout << responseMsg;
 
             //store file
-            storeFile(requestedFile , responseMsg);
+            storeFile(filePath , responseMsg);
 
-        }else{
+        }else {
+            //open an input stream
+            ifstream fis("../clientFiles/" + filePath);
 
+            //continue if file is found
+            if (fis) {
+
+                //get file length
+                fis.seekg(0, fis.end);
+                int length = fis.tellg();
+                fis.seekg(0, fis.beg);
+
+                //allocate buffer to store file
+                char buffer[length];
+
+                //read file into buffer
+                fis.read(buffer, length);
+
+                //close input stream
+                fis.close();
+
+                //send file to server
+                string request = string(req) + "\r\n";//status line
+                request += buffer;
+                request += "\r\n";//data
+
+                send(connSocket, request.c_str(), request.size(), 0);
+
+                //Receive response from server
+                string responseMsg = receiveMsg(connSocket);
+
+                //display message
+                cout << responseMsg;
+
+            }
         }
 
 
@@ -108,7 +141,7 @@ vector<string> split(string str, char delimiter) {
 }
 
 
-string receiveFile(int socket){
+string receiveMsg(int socket){
 
     char buffer[BUFF_SIZE];
     string response = "";
@@ -130,20 +163,19 @@ string receiveFile(int socket){
 }
 
 
-void storeFile(string fileName , string response){
-    ofstream ofs ("../clientFiles/" + fileName, ofstream::out);
+void storeFile(string filePath , string response){
+    ofstream ofs ("../clientFiles/" + filePath, ofstream::out);
 
 
-    int fieldStartInd = response.find("Content-Length");
-    int fieldEndInd = response.find_first_of("\r\n",fieldStartInd);
-    int length = atoi(response.substr(fieldStartInd+16 , fieldEndInd).c_str());
-    
-    int dataBegin = response.find_last_of("\r\n");
+    int dataBegin = response.find_first_of("\r\n");
+    int dataEnd = response.find_last_of("\r\n");
+
+    int length = dataEnd - dataBegin;
+
     string data = response.substr(dataBegin,length);
 
     ofs << data;
 
     ofs.close();
-
 
 }

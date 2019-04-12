@@ -8,8 +8,8 @@
 #include <arpa/inet.h>
 #include <cstring>
 
-#define REQ_BUF_LEN 2048
 #define SERV_PORT 8080
+#define BUFF_SIZE 3000
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-noreturn"
@@ -17,8 +17,10 @@
 using namespace std;
 
 vector<string> split(string str, char delimiter);
-void process(int socket, string reqType, string filePath);
-void log(char request[] , char clientAddr[] , int clientPort);
+string receiveMsg(int socket);
+void storeFile(string filePath , string response);
+void process(int socket, string reqType, string filePath , string reqMsg);
+void log(string request , char clientAddr[] , int clientPort);
 
 int main() {
 
@@ -70,24 +72,25 @@ int main() {
             perror("Couldn't get client address");
             exit(EXIT_FAILURE);
         }
+        
         //convert to human readable address
         char clientStrAddr[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(clientAddr.sin_addr), clientStrAddr, INET_ADDRSTRLEN);
 
         //read request
-        char req[REQ_BUF_LEN] = {0};
-        recv(connSocket, req, REQ_BUF_LEN, NULL);
-
-        //log request
-        log(req , clientStrAddr , clientAddr.sin_port);
+        string request = receiveMsg(connSocket);
 
         //parse request
-        vector<string> splitReq = split(req, ' ');
-        string reqType = splitReq[0];
-        string requestedFile = splitReq[1];
+        string reqLine = request.substr(0,request.find_first_of("\r\n"));
+        vector<string> splitReqLine = split(reqLine , ' ');
+        string reqType = splitReqLine[0];
+        string filePath = splitReqLine[1];
 
+        //log request
+        log(reqLine , clientStrAddr , clientAddr.sin_port);
+        
         //do action
-        process(connSocket, reqType, requestedFile);
+        process(connSocket, reqType, filePath , request);
 
         //close connection socket
         close(connSocket);
@@ -124,7 +127,7 @@ vector<string> split(string str, char delimiter) {
  * @param reqType
  * @param filePath
  */
-void process(int socket, string reqType, string filePath) {
+void process(int socket, string reqType, string filePath , string reqMsg) {
 
     if (reqType == "GET") {
         //open an input stream
@@ -149,9 +152,8 @@ void process(int socket, string reqType, string filePath) {
 
             //send file buffer to client
             string response = "HTTP/1.0 200 OK\r\n";//status line
-            response += "Content-Length: " + to_string(length) + "\r\n";
-            response += "\r\n";
             response += buffer;//data
+            response += "\r\n";
 
             send(socket, response.c_str() , response.size() , 0);
 
@@ -164,12 +166,17 @@ void process(int socket, string reqType, string filePath) {
 
 
     } else { // POST request
+        storeFile(filePath , reqMsg);
 
+        //send response to client
+        string response = "HTTP/1.0 200 OK\r\n";//status line
+
+        send(socket, response.c_str() , response.size() , 0);
 
     }
 }
 
-void log(char request[] , char clientAddr[] , int clientPort){
+void log(string request , char clientAddr[] , int clientPort){
     ofstream ofs ("../serverFiles/log.txt", ofstream::app);
 
     time_t curr_time = time(NULL);
@@ -177,6 +184,45 @@ void log(char request[] , char clientAddr[] , int clientPort){
     tm[strlen(tm) - 1] = '\0';
 
     ofs << tm << "  (" << request << ")  " << clientAddr << "  " << to_string(clientPort) << endl;
+
+    ofs.close();
+}
+
+
+string receiveMsg(int socket){
+
+    char buffer[BUFF_SIZE];
+    string response = "";
+    int length = 0;
+
+    do{
+        length = recv(socket, &buffer , sizeof(buffer), 0);
+        response.append(buffer,length);
+
+    }while (length > 0);
+
+    if (length == -1){
+        perror("recv error");
+    }else if (length == 0){
+        close(socket);
+    }
+
+    return response;
+}
+
+
+void storeFile(string filePath , string request){
+    ofstream ofs ("../serverFiles/" + filePath, ofstream::out);
+
+
+    int dataBegin = request.find_first_of("\r\n");
+    int dataEnd = request.find_last_of("\r\n");
+
+    int length = dataEnd - dataBegin;
+
+    string data = request.substr(dataBegin,length);
+
+    ofs << data;
 
     ofs.close();
 
