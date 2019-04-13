@@ -7,6 +7,7 @@
 #include <fstream>
 #include <arpa/inet.h>
 #include <cstring>
+#include <thread>
 
 #define SERV_PORT 8080
 #define BUFF_SIZE 3000
@@ -23,6 +24,7 @@ string receiveReq(int socket);
 void storeFile(string filePath , string request);
 void process(int socket , string reqMsg);
 void log(string request , char clientAddr[] , int clientPort);
+void serve(int connSocket);
 
 int main() {
 
@@ -66,41 +68,46 @@ int main() {
             exit(EXIT_FAILURE);
         }
 
-        //get client address
-        struct sockaddr_in clientAddr;
-        int clientAddrLen = sizeof(clientAddr);
-        retVal = getpeername(connSocket , (struct sockaddr *)&clientAddr , (socklen_t *)&clientAddrLen);
-        if(retVal == -1){
-            perror("Couldn't get client address");
-            exit(EXIT_FAILURE);
-        }
-
-        //convert to human readable address
-        char clientStrAddr[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &(clientAddr.sin_addr), clientStrAddr, INET_ADDRSTRLEN);
-
-        //read request
-        string request = receiveReq(connSocket);
-
-        cout << "incoming request" << endl;
-        cout << request <<endl;
-
-        //parse request
-        string reqLine = request.substr(0,request.find("\r\n"));
-
-        //log request
-        log(reqLine , clientStrAddr , clientAddr.sin_port);
-
-        //do action
-        process(connSocket , request);
-
-        //close connection socket
-        close(connSocket);
-
+        thread thread_obj(serve, connSocket);
+        thread_obj.join();
 
     }
 
 
+}
+
+void serve(int connSocket){
+
+    //get client address
+    struct sockaddr_in clientAddr;
+    int clientAddrLen = sizeof(clientAddr);
+    int retVal = getpeername(connSocket , (struct sockaddr *)&clientAddr , (socklen_t *)&clientAddrLen);
+    if(retVal == -1){
+        perror("Couldn't get client address");
+        exit(EXIT_FAILURE);
+    }
+
+    //convert to human readable address
+    char clientStrAddr[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(clientAddr.sin_addr), clientStrAddr, INET_ADDRSTRLEN);
+
+    //read request
+    string request = receiveReq(connSocket);
+
+    cout << "incoming request" << endl;
+    cout << request <<endl;
+
+    //parse request
+    string reqLine = request.substr(0,request.find("\r\n"));
+
+    //log request
+    log(reqLine , clientStrAddr , clientAddr.sin_port);
+
+    //do action
+    process(connSocket , request);
+
+    //close connection socket
+    close(connSocket);
 }
 
 /**
@@ -136,7 +143,7 @@ void process(int socket , string reqMsg) {
 
     if (reqType == "GET") {
         //open an input stream
-        ifstream fis("../serverFiles/" + filePath , ifstream::in | ifstream::binary);
+        ifstream fis("../serverFiles/" + filePath ,  ifstream::binary | ifstream::in );
 
         //continue if file is found
         if (fis) {
@@ -169,7 +176,15 @@ void process(int socket , string reqMsg) {
             cout << "server response " << endl;
             cout << response << endl;
 
-            send(socket, response.c_str() , response.size() , 0);
+            cout << fis.gcount() << endl;
+            cout << sizeof(buffer) << endl;
+            cout << strlen(response.c_str()) << endl;
+            cout << response.size() << endl;
+
+//            send(socket, response.c_str(), length+42, 0);
+            send(socket, response.c_str(), response.size(), 0);
+
+
 
         } else {
             //file not found
@@ -259,9 +274,10 @@ void storeFile(string filePath , string request){
     ofstream ofs ("../serverFiles/" + filePath, ofstream::out | ofstream::binary);
 
     int beginContentLen = request.find("Content-Length: ") + 16;
-    int contentLen = atoi(request.substr(beginContentLen , request.find('\r' , beginContentLen)).c_str());
+    int endContentLen = request.find('\r' , beginContentLen);
+    int contentLen = atoi(request.substr(beginContentLen , endContentLen).c_str());
 
-    string data = request.substr(beginContentLen ,contentLen);
+    string data = request.substr(request.find("\r\n\r\n")+4 ,contentLen);
 
     ofs << data;
 

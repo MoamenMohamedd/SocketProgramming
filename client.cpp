@@ -204,9 +204,10 @@ void storeFile(string filePath , string response){
     ofstream ofs ("../clientFiles/" + filePath, ofstream::out | ofstream::binary);
 
     int beginContentLen = response.find("Content-Length: ") + 16;
-    int contentLen = atoi(response.substr(beginContentLen , response.find('\r' , beginContentLen)).c_str());
+    int endContentLen = response.find('\r' , beginContentLen);
+    int contentLen = atoi(response.substr(beginContentLen , endContentLen).c_str());
 
-    string data = response.substr(beginContentLen ,contentLen);
+    string data = response.substr(response.find("\r\n\r\n")+4 ,contentLen);
 
     ofs << data;
 
