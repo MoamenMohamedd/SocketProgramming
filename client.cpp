@@ -64,13 +64,14 @@ int main(int argc, char const *argv[]) {
         if(reqType == "GET"){
 
             //Send the request
-            send(connSocket, req, strlen(req), 0);
+            string request = string(req) + "\r\n";//request line
+            send(connSocket, request.c_str(), request.size(), 0);
 
             //Receive response from server
             string responseMsg = receiveMsg(connSocket);
 
             //display message
-            cout << responseMsg;
+            cout << responseMsg << endl;
 
             //store file
             storeFile(filePath , responseMsg);
@@ -97,7 +98,7 @@ int main(int argc, char const *argv[]) {
                 fis.close();
 
                 //send file to server
-                string request = string(req) + "\r\n";//status line
+                string request = string(req) + "\r\n";//request line
                 request += buffer;
                 request += "\r\n";//data
 
@@ -114,6 +115,7 @@ int main(int argc, char const *argv[]) {
 
 
 
+        close(connSocket);
 
     }
 
@@ -147,16 +149,17 @@ string receiveMsg(int socket){
     string response = "";
     int length = 0;
 
-    do{
+    while (true){
         length = recv(socket, &buffer , sizeof(buffer), 0);
         response.append(buffer,length);
+        if(response[response.size()-1] == '\n'){
+            break;
+        }
 
-    }while (length > 0);
+    }
 
     if (length == -1){
         perror("recv error");
-    }else if (length == 0){
-        close(socket);
     }
 
     return response;
@@ -167,12 +170,13 @@ void storeFile(string filePath , string response){
     ofstream ofs ("../clientFiles/" + filePath, ofstream::out);
 
 
-    int dataBegin = response.find_first_of("\r\n");
-    int dataEnd = response.find_last_of("\r\n");
+    int dataBegin = response.find_first_of('\n');
+    int dataEnd = response.find_last_of('\n');
+
 
     int length = dataEnd - dataBegin;
 
-    string data = response.substr(dataBegin,length);
+    string data = response.substr(dataBegin+1,length);
 
     ofs << data;
 

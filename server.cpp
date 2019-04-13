@@ -72,7 +72,7 @@ int main() {
             perror("Couldn't get client address");
             exit(EXIT_FAILURE);
         }
-        
+
         //convert to human readable address
         char clientStrAddr[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(clientAddr.sin_addr), clientStrAddr, INET_ADDRSTRLEN);
@@ -81,14 +81,16 @@ int main() {
         string request = receiveMsg(connSocket);
 
         //parse request
-        string reqLine = request.substr(0,request.find_first_of("\r\n"));
+        string reqLine = request.substr(0,request.find_first_of("\r\n")-1);
         vector<string> splitReqLine = split(reqLine , ' ');
         string reqType = splitReqLine[0];
         string filePath = splitReqLine[1];
 
+        cout << reqLine << endl;
+
         //log request
         log(reqLine , clientStrAddr , clientAddr.sin_port);
-        
+
         //do action
         process(connSocket, reqType, filePath , request);
 
@@ -192,35 +194,37 @@ void log(string request , char clientAddr[] , int clientPort){
 string receiveMsg(int socket){
 
     char buffer[BUFF_SIZE];
-    string response = "";
+    string request = "";
     int length = 0;
 
-    do{
+    while (true){
         length = recv(socket, &buffer , sizeof(buffer), 0);
-        response.append(buffer,length);
+        request.append(buffer,length);
+        if(request[request.size()-1] == '\n'){
+            break;
+        }
 
-    }while (length > 0);
+    }
 
     if (length == -1){
         perror("recv error");
-    }else if (length == 0){
-        close(socket);
     }
 
-    return response;
+    return request;
 }
+
 
 
 void storeFile(string filePath , string request){
     ofstream ofs ("../serverFiles/" + filePath, ofstream::out);
 
 
-    int dataBegin = request.find_first_of("\r\n");
-    int dataEnd = request.find_last_of("\r\n");
+    int dataBegin = request.find_first_of('\n');
+    int dataEnd = request.find_last_of('\n');
 
     int length = dataEnd - dataBegin;
 
-    string data = request.substr(dataBegin,length);
+    string data = request.substr(dataBegin + 1,length);
 
     ofs << data;
 
