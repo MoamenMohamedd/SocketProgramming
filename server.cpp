@@ -11,15 +11,17 @@
 #define SERV_PORT 8080
 #define BUFF_SIZE 3000
 
+#define HTTP_VERSION "HTTP/1.0"
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-noreturn"
 
 using namespace std;
 
 vector<string> split(string str, char delimiter);
-string receiveMsg(int socket);
-void storeFile(string filePath , string response);
-void process(int socket, string reqType, string filePath , string reqMsg);
+string receiveReq(int socket);
+void storeFile(string filePath , string request);
+void process(int socket , string reqMsg);
 void log(string request , char clientAddr[] , int clientPort);
 
 int main() {
@@ -78,21 +80,19 @@ int main() {
         inet_ntop(AF_INET, &(clientAddr.sin_addr), clientStrAddr, INET_ADDRSTRLEN);
 
         //read request
-        string request = receiveMsg(connSocket);
+        string request = receiveReq(connSocket);
+
+        cout << "incoming request" << endl;
+        cout << request <<endl;
 
         //parse request
-        string reqLine = request.substr(0,request.find_first_of("\r\n")-1);
-        vector<string> splitReqLine = split(reqLine , ' ');
-        string reqType = splitReqLine[0];
-        string filePath = splitReqLine[1];
-
-        cout << reqLine << endl;
+        string reqLine = request.substr(0,request.find("\r\n"));
 
         //log request
         log(reqLine , clientStrAddr , clientAddr.sin_port);
 
         //do action
-        process(connSocket, reqType, filePath , request);
+        process(connSocket , request);
 
         //close connection socket
         close(connSocket);
@@ -129,11 +129,14 @@ vector<string> split(string str, char delimiter) {
  * @param reqType
  * @param filePath
  */
-void process(int socket, string reqType, string filePath , string reqMsg) {
+void process(int socket , string reqMsg) {
+    vector<string> splitReqMsg = split(reqMsg , ' ');
+    string reqType = splitReqMsg[0];
+    string filePath = splitReqMsg[1];
 
     if (reqType == "GET") {
         //open an input stream
-        ifstream fis("../serverFiles/" + filePath);
+        ifstream fis("../serverFiles/" + filePath , ifstream::in | ifstream::binary);
 
         //continue if file is found
         if (fis) {
@@ -143,25 +146,37 @@ void process(int socket, string reqType, string filePath , string reqMsg) {
             int length = fis.tellg();
             fis.seekg(0, fis.beg);
 
+            cout << "length of file = " << to_string(length) << endl;
+
             //allocate buffer to store file
-            char buffer[length];
+            char *buffer = new char [length];
 
             //read file into buffer
             fis.read(buffer, length);
+            
+            cout << "buffer content" << endl;
+            cout << buffer << endl;
 
             //close input stream
             fis.close();
 
             //send file buffer to client
-            string response = "HTTP/1.0 200 OK\r\n";//status line
-            response += buffer;//data
+            string response = string(HTTP_VERSION) + " " + "200" + " " + "OK" + "\r\n";//status line
+            response += "Content-Length: " + to_string(length) + "\r\n";
             response += "\r\n";
+            response += buffer;//data
+
+            cout << "server response " << endl;
+            cout << response << endl;
 
             send(socket, response.c_str() , response.size() , 0);
 
         } else {
             //file not found
-            string response = "HTTP/1.0 404 Not Found\r\n";//status line
+            string response = string(HTTP_VERSION) + " " + "404" + " " + "Not Found" + "\r\n";//status line
+
+            cout << "server response " << endl;
+            cout << response << endl;
 
             send(socket, response.c_str() , response.size(), 0);
         }
@@ -171,7 +186,10 @@ void process(int socket, string reqType, string filePath , string reqMsg) {
         storeFile(filePath , reqMsg);
 
         //send response to client
-        string response = "HTTP/1.0 200 OK\r\n";//status line
+        string response = string(HTTP_VERSION) + " " + "200" + " " + "Ok" + "\r\n";//status line
+
+        cout << "server response " << endl;
+        cout << response << endl;
 
         send(socket, response.c_str() , response.size() , 0);
 
@@ -191,23 +209,45 @@ void log(string request , char clientAddr[] , int clientPort){
 }
 
 
-string receiveMsg(int socket){
+string receiveReq(int socket){
+
+    //get request type
+    char reqType[3];
+    recv(socket, &reqType, sizeof(reqType), MSG_PEEK);
 
     char buffer[BUFF_SIZE];
     string request = "";
     int length = 0;
 
-    while (true){
-        length = recv(socket, &buffer , sizeof(buffer), 0);
-        request.append(buffer,length);
-        if(request[request.size()-1] == '\n'){
-            break;
+    if(string(reqType) == "GET"){
+        //end at \r\n\r\n if headers else \r\n if not
+        while (true){
+            length = recv(socket, &buffer , sizeof(buffer), 0);
+            request.append(buffer,length);
+            if(request.find("\r\n") != -1){
+                break;
+            }
+
         }
+    }else{
+        int beginData;
+        while (true){
+            length = recv(socket, &buffer , sizeof(buffer), 0);
+            request.append(buffer,length);
+            beginData = request.find("\r\n\r\n")+1;
 
-    }
-
-    if (length == -1){
-        perror("recv error");
+            if(beginData != 0){
+                int counter = request.size() - beginData;
+                int beginContentLen = request.find("Content-Length: ") + 16;
+                int contentLen = atoi(request.substr(beginContentLen , request.find('\r' , beginContentLen)).c_str());
+                while(counter < contentLen){
+                    length = recv(socket, &buffer , sizeof(buffer), 0);
+                    request.append(buffer,length);
+                    counter += length;
+                }
+                break;
+            }
+        }
     }
 
     return request;
@@ -216,15 +256,12 @@ string receiveMsg(int socket){
 
 
 void storeFile(string filePath , string request){
-    ofstream ofs ("../serverFiles/" + filePath, ofstream::out);
+    ofstream ofs ("../serverFiles/" + filePath, ofstream::out | ofstream::binary);
 
+    int beginContentLen = request.find("Content-Length: ") + 16;
+    int contentLen = atoi(request.substr(beginContentLen , request.find('\r' , beginContentLen)).c_str());
 
-    int dataBegin = request.find_first_of('\n');
-    int dataEnd = request.find_last_of('\n');
-
-    int length = dataEnd - dataBegin;
-
-    string data = request.substr(dataBegin + 1,length);
+    string data = request.substr(beginContentLen ,contentLen);
 
     ofs << data;
 

@@ -13,10 +13,12 @@
 //server port number according to http rfc
 #define SERV_PORT 8080
 
+#define HTTP_VERSION "HTTP/1.0"
+
 using namespace std;
 
 vector<string> split(string str, char delimiter);
-string receiveMsg(int socket);
+string receiveResponse(int socket, string reqType);
 void storeFile(string filePath , string response);
 
 int main(int argc, char const *argv[]) {
@@ -64,21 +66,27 @@ int main(int argc, char const *argv[]) {
         if(reqType == "GET"){
 
             //Send the request
-            string request = string(req) + "\r\n";//request line
+            string request = reqType + " " + filePath + " " + HTTP_VERSION + "\r\n";//request line
+
+            cout << "client request " << endl;
+            cout << request << endl;
+
             send(connSocket, request.c_str(), request.size(), 0);
 
             //Receive response from server
-            string responseMsg = receiveMsg(connSocket);
+            string responseMsg = receiveResponse(connSocket , reqType);
 
             //display message
+            cout << "client response " << endl;
             cout << responseMsg << endl;
 
             //store file
             storeFile(filePath , responseMsg);
 
         }else {
+
             //open an input stream
-            ifstream fis("../clientFiles/" + filePath);
+            ifstream fis("../clientFiles/" + filePath , ifstream::in | ifstream::binary);
 
             //continue if file is found
             if (fis) {
@@ -89,7 +97,7 @@ int main(int argc, char const *argv[]) {
                 fis.seekg(0, fis.beg);
 
                 //allocate buffer to store file
-                char buffer[length];
+                char *buffer = new char[length];
 
                 //read file into buffer
                 fis.read(buffer, length);
@@ -98,17 +106,22 @@ int main(int argc, char const *argv[]) {
                 fis.close();
 
                 //send file to server
-                string request = string(req) + "\r\n";//request line
-                request += buffer;
-                request += "\r\n";//data
+                string request = reqType + " " + filePath + " " + HTTP_VERSION + "\r\n";//request line
+                request += "Content-Length: " + to_string(length) + "\r\n";
+                request += "\r\n";
+                request += buffer;//data
+
+                cout << "client request " << endl;
+                cout << request << endl;
 
                 send(connSocket, request.c_str(), request.size(), 0);
 
                 //Receive response from server
-                string responseMsg = receiveMsg(connSocket);
+                string responseMsg = receiveResponse(connSocket , reqType);
 
                 //display message
-                cout << responseMsg;
+                cout << "client response " << endl;
+                cout << responseMsg << endl;
 
             }
         }
@@ -143,23 +156,43 @@ vector<string> split(string str, char delimiter) {
 }
 
 
-string receiveMsg(int socket){
+string receiveResponse(int socket, string reqType){
 
     char buffer[BUFF_SIZE];
     string response = "";
     int length = 0;
 
-    while (true){
-        length = recv(socket, &buffer , sizeof(buffer), 0);
-        response.append(buffer,length);
-        if(response[response.size()-1] == '\n'){
-            break;
+    if(reqType == "GET"){
+        int beginData;
+        while (true){
+            length = recv(socket, &buffer , sizeof(buffer), 0);
+            response.append(buffer,length);
+            beginData = response.find("\r\n\r\n")+1;
+
+            if(beginData != 0){
+                int counter = response.size() - beginData;
+                int beginContentLen = response.find("Content-Length: ") + 16;
+                int contentLen = atoi(response.substr(beginContentLen , response.find('\r' , beginContentLen)).c_str());
+                while(counter < contentLen){
+                    length = recv(socket, &buffer , sizeof(buffer), 0);
+                    response.append(buffer,length);
+                    counter += length;
+
+                }
+                break;
+            }
         }
 
-    }
+    }else{
+        //end at \r\n\r\n if headers else \r\n if not
+        while (true){
+            length = recv(socket, &buffer , sizeof(buffer), 0);
+            response.append(buffer,length);
+            if(response.find("\r\n")){
+                break;
+            }
 
-    if (length == -1){
-        perror("recv error");
+        }
     }
 
     return response;
@@ -167,19 +200,17 @@ string receiveMsg(int socket){
 
 
 void storeFile(string filePath , string response){
-    ofstream ofs ("../clientFiles/" + filePath, ofstream::out);
 
+    ofstream ofs ("../clientFiles/" + filePath, ofstream::out | ofstream::binary);
 
-    int dataBegin = response.find_first_of('\n');
-    int dataEnd = response.find_last_of('\n');
+    int beginContentLen = response.find("Content-Length: ") + 16;
+    int contentLen = atoi(response.substr(beginContentLen , response.find('\r' , beginContentLen)).c_str());
 
-
-    int length = dataEnd - dataBegin;
-
-    string data = response.substr(dataBegin+1,length);
+    string data = response.substr(beginContentLen ,contentLen);
 
     ofs << data;
 
     ofs.close();
+
 
 }
