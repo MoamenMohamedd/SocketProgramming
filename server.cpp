@@ -220,9 +220,11 @@ void log(string request , char clientAddr[] , int clientPort){
 
     time_t curr_time = time(NULL);
     char *tm = ctime(&curr_time);
-    tm[strlen(tm) - 1] = '\0';
 
-    ofs << tm << "  (" << request << ")  " << clientAddr << "  " << to_string(clientPort) << endl;
+    //remove trailing \n
+    tm[strlen(tm) - 2] = '\0';
+
+    ofs << tm << "  (" << request.substr(0, request.size()-2) << ")  " << clientAddr << "  " << to_string(clientPort) << endl;
 
     ofs.close();
 }
@@ -260,6 +262,17 @@ tuple<string, string, string> receiveReq(int socket){
             reqLine = match[1];
             headers = match[2];
             data = match[3];
+
+            //get content length
+            regex fieldReg(R"(Content-Length: ([0-9]+)\r\n)");
+            smatch fieldMatch;
+            regex_search(headers,fieldMatch,fieldReg);
+            int contentLen = atoi(string(fieldMatch[1]).c_str());
+
+            while(data.size() != contentLen){
+                length = recv(socket, &buffer, sizeof(buffer), 0);
+                data.append(buffer,length);
+            }
 
             return make_tuple(reqLine, headers, data);
         }

@@ -7,6 +7,7 @@
 #include <fstream>
 #include <vector>
 #include <sstream>
+#include <regex>
 
 
 #define BUFF_SIZE 3000
@@ -19,8 +20,10 @@
 using namespace std;
 
 vector<string> split(string str, char delimiter);
-string receiveResponse(int socket, string reqType);
-void storeFile(string filePath , string response);
+
+tuple<string, string, string> receiveRes(int socket, string reqType);
+
+void storeFile(string filePath, string data);
 
 int main(int argc, char const *argv[]) {
 
@@ -36,7 +39,7 @@ int main(int argc, char const *argv[]) {
     while (requests.getline(req, 100)) {
 
         //split client request
-        vector<string> splitReq = split(req,' ');
+        vector<string> splitReq = split(req, ' ');
         string reqType = splitReq[0];
         string filePath = splitReq[1];
         string hostAddr = splitReq[2];
@@ -55,16 +58,14 @@ int main(int argc, char const *argv[]) {
             exit(EXIT_FAILURE);
         }
 
-
         //Connect to server
         if (connect(connSocket, (struct sockaddr *) &serverAddr, sizeof(serverAddr)) == -1) {
             perror("Connection Failed");
             exit(EXIT_FAILURE);
         }
 
-
-
-        if(reqType == "GET"){
+        // modify and send request to server
+        if (reqType == "GET") {
 
             //Send the request
             string request = reqType + " " + filePath + " " + HTTP_VERSION + "\r\n";//request line
@@ -75,19 +76,24 @@ int main(int argc, char const *argv[]) {
             send(connSocket, request.c_str(), request.size(), 0);
 
             //Receive response from server
-            string responseMsg = receiveResponse(connSocket , reqType);
+            string statusLine, headers, data;
+            tie(statusLine, headers, data) = receiveRes(connSocket, reqType);
 
-            //display message
-            cout << "client response " << endl;
-            cout << responseMsg << endl;
+            //display response
+            cout << "server response " << endl;
+            cout << statusLine << endl;
 
-            //store file
-            storeFile(filePath , responseMsg);
+            int statusCode = atoi(split(statusLine, ' ')[1].c_str());
+            if (statusCode != 404) {
+                //store file
+                storeFile(filePath, data);
+            }
 
-        }else {
+
+        } else {
 
             //open an input stream
-            ifstream fis("../clientFiles/" + filePath , ifstream::in | ifstream::binary);
+            ifstream fis("../clientFiles/" + filePath, ifstream::in | ifstream::binary);
 
             //continue if file is found
             if (fis) {
@@ -110,23 +116,23 @@ int main(int argc, char const *argv[]) {
                 string request = reqType + " " + filePath + " " + HTTP_VERSION + "\r\n";//request line
                 request += "Content-Length: " + to_string(length) + "\r\n";
                 request += "\r\n";
-                request += buffer;//data
-
-                cout << "client request " << endl;
-                cout << request << endl;
 
                 send(connSocket, request.c_str(), request.size(), 0);
+                send(connSocket, buffer, fis.gcount(), 0); //data
+
+                cout << "My request " << endl;
+                cout << request + "data" << endl;
 
                 //Receive response from server
-                string responseMsg = receiveResponse(connSocket , reqType);
+                string statusLine, headers, data;
+                tie(statusLine, headers, data) = receiveRes(connSocket, reqType);
 
-                //display message
-                cout << "client response " << endl;
-                cout << responseMsg << endl;
+                //display response
+                cout << "server response " << endl;
+                cout << statusLine << endl;
 
             }
         }
-
 
 
         close(connSocket);
@@ -157,62 +163,74 @@ vector<string> split(string str, char delimiter) {
 }
 
 
-string receiveResponse(int socket, string reqType){
+tuple<string, string, string> receiveRes(int socket, string reqType) {
+
+
+    regex getResReg(R"(^(\S+\s\S+\s[\w ]+\r\n)([\S\s]+\r\n\r\n){0,1}([\S\s]+){0,1}$)");
+    regex postResReg(R"(^(\S+\s\S+\s\S+\r\n)([\S\s]+\r\n\r\n){0,1}$)");
+    smatch match;
 
     char buffer[BUFF_SIZE];
     string response = "";
+    string statusLine, headers, data;
     int length = 0;
 
-    if(reqType == "GET"){
-        int beginData;
-        while (true){
-            length = recv(socket, &buffer , sizeof(buffer), 0);
-            response.append(buffer,length);
-            beginData = response.find("\r\n\r\n")+1;
+    if (reqType == "GET") {
+        while (true) {
+            length = recv(socket, &buffer, sizeof(buffer), 0);
+            response.append(buffer, length);
 
-            if(beginData != 0){
-                int counter = response.size() - beginData;
-                int beginContentLen = response.find("Content-Length: ") + 16;
-                int contentLen = atoi(response.substr(beginContentLen , response.find('\r' , beginContentLen)).c_str());
-                while(counter < contentLen){
-                    length = recv(socket, &buffer , sizeof(buffer), 0);
-                    response.append(buffer,length);
-                    counter += length;
+            if (regex_match(response, match, getResReg)) {
+                statusLine = match[1];
+                headers = match[2];
+                data = match[3];
 
+                //if status code is 404 then no data
+                if (statusLine.find("404") != -1)
+                    return make_tuple(statusLine, headers, "");
+
+                //get content length
+                regex fieldReg(R"(Content-Length: ([0-9]+)\r\n)");
+                smatch fieldMatch;
+                regex_search(headers, fieldMatch, fieldReg);
+                int contentLen = atoi(string(fieldMatch[1]).c_str());
+
+                while(data.size() != contentLen){
+                    length = recv(socket, &buffer, sizeof(buffer), 0);
+                    data.append(buffer,length);
                 }
-                break;
+
+                return make_tuple(statusLine, headers, data);
             }
         }
 
-    }else{
-        //end at \r\n\r\n if headers else \r\n if not
-        while (true){
-            length = recv(socket, &buffer , sizeof(buffer), 0);
-            response.append(buffer,length);
-            if(response.find("\r\n")){
-                break;
-            }
+    } else {
 
+        while (true) {
+            length = recv(socket, &buffer, sizeof(buffer), 0);
+            response.append(buffer, length);
+
+            if (regex_match(response, match, postResReg)) {
+                statusLine = match[1];
+                headers = match[2];
+                data = "";
+
+                return make_tuple(statusLine, headers, data);
+            }
         }
+
     }
 
-    return response;
+
 }
 
 
-void storeFile(string filePath , string response){
+void storeFile(string filePath, string data) {
 
-    ofstream ofs ("../clientFiles/" + filePath, ofstream::out | ofstream::binary);
-
-    int beginContentLen = response.find("Content-Length: ") + 16;
-    int endContentLen = response.find('\r' , beginContentLen);
-    int contentLen = atoi(response.substr(beginContentLen , endContentLen).c_str());
-
-    string data = response.substr(response.find("\r\n\r\n")+4 ,contentLen);
+    ofstream ofs("../clientFiles/" + filePath, ofstream::binary | ofstream::out);
 
     ofs << data;
 
     ofs.close();
-
 
 }
